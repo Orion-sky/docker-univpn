@@ -9,14 +9,14 @@
 
 **本版本新增功能：** 容器包含智能**保活系统 (Keep-Alive)**，如果连接断开或应用程序崩溃，它可以自动重启 VPN 客户端。
 
-**免责声明：** 本项目为非官方项目，与华为公司无任何关联。华为 UniVPN 客户端软件本身为华为公司的专有财产。尽管为了方便构建，二进制文件已包含在 `./bin` 目录中，但**您有责任在使用时遵守华为的服务条款和许可协议**。
+**免责声明：** 本项目为非官方项目，与华为公司无任何关联。华为 UniVPN 客户端软件本身为华为公司的专有财产。Dockerfile 会在构建时直接从华为/绿盟官方服务器下载客户端安装包，仓库里不包含任何二进制文件，**您有责任在使用时遵守华为的服务条款和许可协议**。
 
 ## 内含软件信息 (版本: 10781.21.0.0831)
 
 | 字段           | 值                                                           |
 | :------------- | :----------------------------------------------------------- |
 | Release 版本   | **10781.21.0.0831**                                          |
-| 二进制文件位置 | 包含在仓库中: `./bin/univpn-linux-64-10781.21.0.0831.zip` (amd64)、`./bin/univpn-linuxarm-64-10781.21.0.0831.zip` (arm64) |
+| 二进制文件来源 | 构建时从 `download.leagsoft.com` 下载 (amd64 与 arm64 安装包)  |
 | 基础操作系统   | Ubuntu 22.04 LTS                                             |
 | 支持架构       | `linux/amd64`、`linux/arm64`                                 |
 | 访问方式       | VNC (端口 5901), Web 浏览器通过 noVNC (端口 6901)            |
@@ -35,7 +35,7 @@
 
 ## 先决条件
 
-- 宿主机已安装 Docker 和 Docker Compose。
+- 宿主机已安装 Docker，并带有 Docker Compose v2（也就是 `docker compose` 子命令；老的独立 `docker-compose` 二进制已经停止维护）。
 - 宿主机已加载 `tun` 内核模块 (`sudo modprobe tun`)。
 
 ## 如何使用 (推荐 Docker Compose)
@@ -81,8 +81,8 @@
     `docker-compose.yml` 在 `image:` 之外还加了 `build:` 配置，所以全程本地构建、本地运行，不会从 Docker Hub 拉取，也不会推送上去。
 
     ```bash
-    docker-compose up -d            # 第一次会本地构建，之后直接运行
-    docker-compose up -d --build    # 强制重新构建（比如改了 Dockerfile 之后）
+    docker compose up -d            # 第一次会本地构建，之后直接运行
+    docker compose up -d --build    # 强制重新构建（比如改了 Dockerfile 之后）
     ```
 
 4.  **连接到 GUI:**
@@ -118,7 +118,6 @@
 您也可以手动构建：
 
 ```bash
-# 确保您的 bin/ 目录下有对应架构的 zip 文件
 docker build -t triatk/univpn:latest-cli -f Dockerfile.cli .
 ```
 
@@ -166,9 +165,9 @@ Please choose Connection Type
 `./univpn_config/` 下有了配置文件之后，在 `.env` 里填好账号密码（参考 `.envexample`），正常启动容器即可。`docker-compose-cli.yml` 同样加了 `build:` 配置，本地构建，不会去 Docker Hub 拉取：
 
 ```bash
-docker-compose -f docker-compose-cli.yml up -d            # 第一次会本地构建
-docker-compose -f docker-compose-cli.yml up -d --build    # 强制重新构建
-docker-compose -f docker-compose-cli.yml logs -f
+docker compose -f docker-compose-cli.yml up -d            # 第一次会本地构建
+docker compose -f docker-compose-cli.yml up -d --build    # 强制重新构建
+docker compose -f docker-compose-cli.yml logs -f
 ```
 
 `univpn-keeper.sh.cli` 会自动驱动 `UniVPNCS`：从菜单里选中第一个已保存的连接、发起连接，并用环境变量里的 `VPN_USERNAME`/`VPN_PASSWORD` 自动应答用户名密码提示。SOCKS5 (`1080`) 和 HTTP (`8888`) 代理跟 GUI 镜像一样会自动起来。
@@ -230,7 +229,7 @@ docker exec univpn reconnect
 
 - **无限重启循环:** 如果看到 VPN 反复打开和关闭，请检查 `RECONNECT_PING_TARGET` 是否可达。如果 VPN 禁止访问外网但允许访问内网，请将目标 IP 设置为内网服务器 IP。
 - **登录时间不足:** 在 `.env` 文件中增加 `RECONNECT_GRACE_PERIOD` 的值。
-- **容器崩溃:** 查看日志: `docker-compose logs univpn`。注意 `docker-compose logs` 只能看到 supervisor 自己的编排日志——VPN 客户端真正的日志在容器内的 `/var/log/supervisor/univpn-keeper_stdout.log`（GUI 镜像）或 `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log`（CLI 镜像）。
+- **容器崩溃:** 查看日志: `docker compose logs univpn`。注意 `docker compose logs` 只能看到 supervisor 自己的编排日志——VPN 客户端真正的日志在容器内的 `/var/log/supervisor/univpn-keeper_stdout.log`（GUI 镜像）或 `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log`（CLI 镜像）。
 
 ## 已知问题
 
@@ -240,4 +239,4 @@ docker exec univpn reconnect
 
 ## 许可证
 
-本仓库中的 Dockerfile 和脚本根据 [MIT 许可证](LICENSE) 提供。`./bin` 目录中的华为软件受其专有协议约束。
+本仓库中的 Dockerfile 和脚本根据 [MIT 许可证](LICENSE) 提供。构建时下载的华为客户端软件受其专有协议约束。

@@ -1,11 +1,6 @@
 name: Update UniVPN Version
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "bin/**"
   workflow_dispatch:
     inputs:
       version:
@@ -21,73 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Determine version
-        id: determine-version
+      - name: Update Dockerfiles and docker-compose.yml
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            # Manual trigger - use provided version
-            VERSION="${{ github.event.inputs.version }}"
-            echo "Using manually provided version: $VERSION"
-          else
-            # Automatic trigger - extract version from file
-            echo "Extracting version from changed files..."
-            VERSION=""
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "IS_MANUAL=${{ github.event_name == 'workflow_dispatch' }}" >> $GITHUB_OUTPUT
-
-      - name: Get changed files in bin directory
-        if: github.event_name != 'workflow_dispatch'
-        id: changed-files
-        uses: tj-actions/changed-files@v46
-        with:
-          base_sha: ${{ github.event.before }}
-          files: bin/**
-
-      - name: Extract new version
-        if: github.event_name != 'workflow_dispatch'
-        id: get-version
-        run: |
-          NEW_FILE=$(echo "${{ steps.changed-files.outputs.added_files }}" | grep 'bin/univpn-linux-64-.*\\.zip' | head -n 1)
-          if [ -z "$NEW_FILE" ]; then
-            echo "No new UniVPN zip file detected in bin/ directory. Exiting."
-            exit 0
-          fi
-          VERSION=$(echo "$NEW_FILE" | sed -E 's/bin\/univpn-linux-64-(.*)\\.zip/\\1/' | sed -E 's/\\.0*([0-9]+)$/\\.\\1/')
-          echo "Detected new version: $VERSION"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Set final version
-        id: final-version
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ steps.get-version.outputs.VERSION }}"
-          fi
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "Final version to update: $VERSION"
-
-      - name: Update docker-compose.yml
-        if: steps.final-version.outputs.VERSION != ''
-        run: |
-          sed -i -E "s/image: triatk\\/univpn:.*/image: triatk\\/univpn:${{ steps.final-version.outputs.VERSION }}/" docker-compose.yml
-          echo "Updated docker-compose.yml with version ${{ steps.final-version.outputs.VERSION }}"
-
-      - name: Update Dockerfile
-        if: steps.final-version.outputs.VERSION != ''
-        run: |
-          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${{ steps.final-version.outputs.VERSION }}/" Dockerfile
-          echo "Updated Dockerfile with version ${{ steps.final-version.outputs.VERSION }}"
-          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${{ steps.final-version.outputs.VERSION }}/" Dockerfile.cli
-          echo "Updated Dockerfile.cli with version ${{ steps.final-version.outputs.VERSION }}"
+          VERSION="${{ github.event.inputs.version }}"
+          sed -i -E "s/image: triatk\/univpn:.*/image: triatk\/univpn:${VERSION}/" docker-compose.yml
+          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${VERSION}/" Dockerfile Dockerfile.cli
+          echo "Updated Dockerfile, Dockerfile.cli, and docker-compose.yml to version ${VERSION}"
 
       - name: Update README.md and README_zh.md with new version
-        if: steps.final-version.outputs.VERSION != ''
         run: |
           # Detect the old version in the README files
           OLD_VERSION=$(grep -oP '\| Release[^\|]*\| \*\*\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?=\*\*)' README.md)
-          NEW_VERSION="${{ steps.final-version.outputs.VERSION }}"
+          NEW_VERSION="${{ github.event.inputs.version }}"
 
           if [[ -z "$OLD_VERSION" || -z "$NEW_VERSION" ]]; then
               echo "Could not detect version numbers properly."
@@ -102,15 +42,14 @@ jobs:
           echo "Updated README.md and README_zh.md from version $OLD_VERSION to $NEW_VERSION."
 
       - name: Create Pull Request
-        if: steps.final-version.outputs.VERSION != ''
         uses: peter-evans/create-pull-request@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "chore: Update UniVPN client to version ${{ steps.final-version.outputs.VERSION }}"
-          title: "chore: Update UniVPN client to version ${{ steps.final-version.outputs.VERSION }}"
+          commit-message: "chore: Update UniVPN client to version ${{ github.event.inputs.version }}"
+          title: "chore: Update UniVPN client to version ${{ github.event.inputs.version }}"
           body: |
-            This PR updates the UniVPN client version in `docker-compose.yml` and `Dockerfile` to `${{ steps.final-version.outputs.VERSION }}`.
-            ${{ github.event_name == 'workflow_dispatch' && 'This is a manually triggered PR.' || 'This is an automated PR triggered by a new file push to the `bin/` directory.' }}
+            This PR updates the UniVPN client version in `docker-compose.yml`, `Dockerfile`, and `Dockerfile.cli` to `${{ github.event.inputs.version }}`.
+            This is a manually triggered PR.
           branch: automated-version-update
           base: main
           delete-branch: true

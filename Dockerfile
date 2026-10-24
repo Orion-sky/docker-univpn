@@ -4,8 +4,8 @@ FROM ubuntu:22.04
 # Set Arguments
 ARG TARGETARCH
 ARG CLIENT_VERSION=10781.21.0.0831
-ARG ZIP_FILE_AMD64_REL_PATH=bin/univpn-linux-64-${CLIENT_VERSION}.zip
-ARG ZIP_FILE_ARM64_REL_PATH=bin/univpn-linuxarm-64-${CLIENT_VERSION}.zip
+ARG DOWNLOAD_URL_AMD64=https://download.leagsoft.com/download/UniVPN/linux/univpn-linux-64-${CLIENT_VERSION}.zip
+ARG DOWNLOAD_URL_ARM64=https://download.leagsoft.com/download/UniVPN/linuxarm/univpn-linuxarm-64-${CLIENT_VERSION}.zip
 ARG INSTALLER_SOURCE_DIR=/home/UniVPN
 ARG ACTUAL_INSTALL_DIR=/usr/local/UniVPN
 ARG GUI_APP_PATH=${ACTUAL_INSTALL_DIR}
@@ -47,6 +47,7 @@ RUN printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACK
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    curl \
     unzip \
     locales \
     ca-certificates \
@@ -114,20 +115,18 @@ RUN echo "Verifying ${USERNAME} home directory..." && \
 RUN mkdir -p ${INSTALLER_SOURCE_DIR} && \
     chown ${USERNAME}:${USERNAME} ${INSTALLER_SOURCE_DIR}
 
-# Copy both architecture installer zips; the correct one is selected below based on TARGETARCH
-COPY ${ZIP_FILE_AMD64_REL_PATH} ${INSTALLER_SOURCE_DIR}/installer-amd64.zip
-COPY ${ZIP_FILE_ARM64_REL_PATH} ${INSTALLER_SOURCE_DIR}/installer-arm64.zip
-
 # Set the working directory TO the installer source directory
 WORKDIR ${INSTALLER_SOURCE_DIR}
 
-# Select the installer zip matching the build target's architecture
+# Download the installer matching the build target's architecture directly from
+# Leagsoft (no need to keep the multi-hundred-MB client zips checked into the repo)
 RUN case "${TARGETARCH}" in \
-        amd64) mv installer-amd64.zip installer.zip ;; \
-        arm64) mv installer-arm64.zip installer.zip ;; \
+        amd64) URL="${DOWNLOAD_URL_AMD64}" ;; \
+        arm64) URL="${DOWNLOAD_URL_ARM64}" ;; \
         *) echo "Error: Unsupported TARGETARCH '${TARGETARCH}'."; exit 1 ;; \
     esac && \
-    rm -f installer-amd64.zip installer-arm64.zip
+    echo "Downloading installer from $URL" && \
+    curl -fL --retry 3 --retry-delay 5 -o installer.zip "$URL"
 
 # Unzip the installer within this directory and remove the zip file
 RUN unzip installer.zip && \

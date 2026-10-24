@@ -1,73 +1,24 @@
-name: Docker Image CI
+name: Docker Build Check
 
 on:
   push:
     branches: ["main", "cli-only-image"]
-    tags: ["*.*.*.*"]
   pull_request:
     branches: ["main"]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Define the Matrix Strategy
+    # Verifies both Dockerfiles still build on both platforms. This repo is maintained
+    # for local builds only — nothing here pushes images anywhere.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # Configuration for the Standard Image
-          - name: standard
-            dockerfile: Dockerfile
-            suffix: ""
-          # Configuration for the CLI Image
-          - name: cli
-            dockerfile: Dockerfile.cli
-            suffix: "-cli"
-
-    outputs:
-      new_version: ${{ steps.get-version.outputs.VERSION }}
+        dockerfile: ["Dockerfile", "Dockerfile.cli"]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Get changed files in bin directory
-        id: changed-files
-        uses: tj-actions/changed-files@v46
-        with:
-          files: bin/**
-
-      - name: Extract new version
-        id: get-version
-        run: |
-          # Get the latest bin file version
-          BIN_FILE=$(ls -1 bin/univpn-linux-*-*.zip 2>/dev/null | sort -V | tail -n 1)
-          
-          if [ -z "$BIN_FILE" ]; then
-            echo "No UniVPN zip file found in bin/ directory."
-            echo "VERSION=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Extract version from bin filename (e.g., univpn-linux-amd64-1.2.3.zip -> 1.2.3)
-          BIN_VERSION=$(basename "$BIN_FILE" .zip | sed -E 's/univpn-linux-(64|amd64)-//')
-          echo "Bin version: $BIN_VERSION"
-          
-          # Get the latest release tag from GitHub
-          LATEST_RELEASE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/${{ github.repository }}/releases/latest \
-            | grep -oP '"tag_name": "\K[^"]*' | head -1 | sed 's/^v//')
-          
-          echo "Latest release: $LATEST_RELEASE"
-          
-          # Compare versions and set VERSION output if bin version is newer
-          if [ -z "$LATEST_RELEASE" ] || [ "$(printf '%s\n' "$LATEST_RELEASE" "$BIN_VERSION" | sort -V | tail -n1)" = "$BIN_VERSION" ] && [ "$LATEST_RELEASE" != "$BIN_VERSION" ]; then
-            echo "New version detected: $BIN_VERSION"
-            echo "VERSION=$BIN_VERSION" >> $GITHUB_OUTPUT
-          else
-            echo "No new version. Bin version ($BIN_VERSION) is not newer than latest release ($LATEST_RELEASE)."
-            echo "VERSION=" >> $GITHUB_OUTPUT
-          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -75,103 +26,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Docker meta
-        id: meta_univpn
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            triatk/univpn
-          # Apply the suffix from the matrix (empty for standard, '-cli' for cli)
-          flavor: |
-            suffix=${{ matrix.suffix }}
-          tags: |
-            type=schedule
-            type=ref,event=branch
-            type=ref,event=pr
-            type=pep440,pattern={{version}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
-            type=raw,value=latest
-            type=raw,value=${{ steps.get-version.outputs.VERSION }},enable=${{ steps.get-version.outputs.VERSION != '' }}
-
-      - name: Build and push
-        id: docker_build
+      - name: Build (no push)
         uses: docker/build-push-action@v6
         with:
-          push: true
+          push: false
           platforms: linux/amd64,linux/arm64
-          # Use the specific Dockerfile from the matrix
           file: ${{ matrix.dockerfile }}
-          tags: ${{ steps.meta_univpn.outputs.tags }}
-          labels: ${{ steps.meta_univpn.outputs.labels }}
-
-  create-release:
-    runs-on: ubuntu-latest
-    needs: build
-    # Only run on main branch pushes and if a version was detected
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.build.outputs.new_version != ''
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-
-      - name: Get new version from build job
-        id: get-new-version
-        run: echo "NEW_VERSION=${{ needs.build.outputs.new_version }}" >> $GITHUB_OUTPUT
-
-      - name: Get previous tag
-        id: previous-tag
-        run: |
-          # Get the most recent tag (excluding the current commit's tags)
-          PREV_TAG=$(git tag --sort=-version:refname | head -1)
-          if [ -z "$PREV_TAG" ]; then
-            # If no tags exist, use the initial commit
-            PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-          fi
-          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_OUTPUT
-
-      - name: Generate Changelog
-        id: changelog
-        uses: mikepenz/release-changelog-builder-action@v6
-        with:
-          token: ${{ secrets.GH_TOKEN }}
-          fromTag: ${{ steps.previous-tag.outputs.PREV_TAG }}
-          toTag: HEAD
-          configuration: |
-            {
-              "categories": [
-                {
-                  "title": "## 🚀 Features",
-                  "labels": ["feature", "enhancement"]
-                },
-                {
-                  "title": "## 🐛 Fixes",
-                  "labels": ["bug", "fix"]
-                },
-                {
-                  "title": "## 🧪 Tests",
-                  "labels": ["test"]
-                }
-              ]
-            }
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
-        with:
-          tag_name: ${{ steps.get-new-version.outputs.NEW_VERSION }}
-          release_name: ${{ steps.get-new-version.outputs.NEW_VERSION }}
-          body: ${{ steps.changelog.outputs.changelog }}
-          prerelease: true

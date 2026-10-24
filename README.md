@@ -8,14 +8,14 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
 
 **New in this version:** The container includes an intelligent **Keep-Alive system** that can automatically restart the VPN client if the connection drops or the application crashes.
 
-**Disclaimer:** This project is unofficial and not affiliated with or endorsed by Huawei. The Huawei UniVPN client software itself is proprietary to Huawei. While the client binary is included in this repository's `./bin` directory for build convenience, **you are responsible for complying with Huawei's terms of service and licensing agreements** regarding its use. This container is provided for technical convenience, isolation, and remote access purposes only. The maintainers of this repository do not grant you any license to use the Huawei software.
+**Disclaimer:** This project is unofficial and not affiliated with or endorsed by Huawei. The Huawei UniVPN client software itself is proprietary to Huawei. The Dockerfiles download the client installer directly from Huawei/Leagsoft's own servers at build time — no client binary is checked into this repository. **You are responsible for complying with Huawei's terms of service and licensing agreements** regarding its use. This container is provided for technical convenience, isolation, and remote access purposes only. The maintainers of this repository do not grant you any license to use the Huawei software.
 
 ## Included Software Information (Version: 10781.21.0.0831)
 
 | Field           | Value                                                               |
 | :-------------- | :------------------------------------------------------------------ |
 | Release         | **10781.21.0.0831**                                                 |
-| Binary Location | Included in repository: `./bin/univpn-linux-64-10781.21.0.0831.zip` (amd64), `./bin/univpn-linuxarm-64-10781.21.0.0831.zip` (arm64) |
+| Binary Source   | Downloaded at build time from `download.leagsoft.com` (amd64 and arm64 installers) |
 | Base OS         | Ubuntu 22.04 LTS                                                    |
 | Architectures   | `linux/amd64`, `linux/arm64`                                        |
 | Access Method   | VNC (Port 5901), Web Browser via noVNC (Port 6901)                  |
@@ -35,7 +35,7 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
 ## Prerequisites
 
 - Docker installed on your host machine.
-- Docker Compose installed (`docker-compose` or `docker compose`).
+- Docker Compose v2 (the `docker compose` subcommand bundled with modern Docker — the standalone `docker-compose` v1 binary is deprecated).
 - The `tun` kernel module loaded on the host (`sudo modprobe tun`). Ensure `/dev/net/tun` exists.
 
 ## How to Use (Docker Compose Recommended)
@@ -81,8 +81,8 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
     `docker-compose.yml` includes a `build:` section alongside `image:`, so everything builds and runs locally — nothing is pulled from or pushed to Docker Hub.
 
     ```bash
-    docker-compose up -d            # builds locally the first time, then just runs
-    docker-compose up -d --build    # force a rebuild (e.g. after editing the Dockerfile)
+    docker compose up -d            # builds locally the first time, then just runs
+    docker compose up -d --build    # force a rebuild (e.g. after editing the Dockerfile)
     ```
 
 4.  **Connect to the GUI:**
@@ -118,7 +118,6 @@ The existing CI workflow (`.github/workflows/docker-image.yml`) has been updated
 To build it manually:
 
 ```bash
-# Ensure you have the matching zip file in ./bin/
 docker build -t triatk/univpn:latest-cli -f Dockerfile.cli .
 ```
 
@@ -166,9 +165,9 @@ After saving, `2:Exit` to quit. This writes `sysconfig.ini` and `config/<Connect
 Once a profile exists under `./univpn_config/`, set your credentials in `.env` (see `.envexample`) and start the container normally. `docker-compose-cli.yml` also has a `build:` section, so this builds locally instead of pulling from Docker Hub:
 
 ```bash
-docker-compose -f docker-compose-cli.yml up -d            # builds locally the first time
-docker-compose -f docker-compose-cli.yml up -d --build    # force a rebuild
-docker-compose -f docker-compose-cli.yml logs -f
+docker compose -f docker-compose-cli.yml up -d            # builds locally the first time
+docker compose -f docker-compose-cli.yml up -d --build    # force a rebuild
+docker compose -f docker-compose-cli.yml logs -f
 ```
 
 `univpn-keeper.sh.cli` drives `UniVPNCS` automatically: it picks the first saved connection from the menu, connects, and answers the username/password prompts using `VPN_USERNAME`/`VPN_PASSWORD` from the environment. The SOCKS5 (`1080`) and HTTP (`8888`) proxies come up the same way as the GUI image.
@@ -230,7 +229,7 @@ If the VPN freezes or you need to restart it manually without restarting the who
 
 - **Looping Restarts:** If you see the VPN opening and closing repeatedly, check if `RECONNECT_PING_TARGET` is reachable. If the VPN blocks internet access but allows internal IPs, set the target to an internal server IP.
 - **Not enough time to login:** Increase `RECONNECT_GRACE_PERIOD` in the `.env` file.
-- **Container Crashing:** Check logs: `docker-compose logs univpn`. Note that `docker-compose logs` only shows supervisor's own output — the actual VPN client log lives at `/var/log/supervisor/univpn-keeper_stdout.log` (GUI image) or `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log` (CLI image) inside the container.
+- **Container Crashing:** Check logs: `docker compose logs univpn`. Note that `docker compose logs` only shows supervisor's own output — the actual VPN client log lives at `/var/log/supervisor/univpn-keeper_stdout.log` (GUI image) or `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log` (CLI image) inside the container.
 
 ## Known Issues
 
@@ -240,4 +239,4 @@ If the VPN freezes or you need to restart it manually without restarting the who
 
 ## License
 
-The Dockerfile and scripts in this repository are provided under the [MIT License](LICENSE). The Huawei software included in `./bin` is proprietary.
+The Dockerfile and scripts in this repository are provided under the [MIT License](LICENSE). The Huawei client software downloaded at build time is proprietary.

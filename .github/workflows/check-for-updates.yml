@@ -5,7 +5,7 @@ on:
   workflow_dispatch: # Allow manual triggering
 
 jobs:
-  check-and-download:
+  check-and-update:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -27,23 +27,16 @@ jobs:
           WEB_VERSION=$(echo "$FULL_URL" | sed -E 's/.*univpn-linux-64-([^.]+\.[^.]+\.[^.]+\.[^.]+)\.zip/\1/')
           echo "Latest web version: $WEB_VERSION"
           echo "WEB_VERSION=$WEB_VERSION" >> $GITHUB_OUTPUT
-          echo "FULL_URL=$FULL_URL" >> $GITHUB_OUTPUT
 
-      - name: Get current local version
+      - name: Get current version from Dockerfile
         id: get-local-version
         run: |
-          LATEST_LOCAL_FILE=$(ls -v bin/univpn-linux-64-*.zip 2>/dev/null | tail -n 1)
-          if [ -z "$LATEST_LOCAL_FILE" ]; then
-            echo "No local UniVPN zip file found. Setting local version to 0."
-            echo "LOCAL_VERSION=0" >> $GITHUB_OUTPUT
-          else
-            LOCAL_VERSION=$(echo "$LATEST_LOCAL_FILE" | sed -E 's/.*univpn-linux-64-([^.]+\.[^.]+\.[^.]+\.[^.]+)\.zip/\1/')
-            echo "Current local version: $LOCAL_VERSION"
-            echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_OUTPUT
-          fi
+          LOCAL_VERSION=$(grep -oP 'ARG CLIENT_VERSION=\K.*' Dockerfile)
+          echo "Current Dockerfile version: $LOCAL_VERSION"
+          echo "LOCAL_VERSION=$LOCAL_VERSION" >> $GITHUB_OUTPUT
 
-      - name: Compare versions and download if newer
-        id: compare-versions-and-download
+      - name: Compare versions and check arm64 availability
+        id: compare-versions
         if: steps.get-web-version.outputs.WEB_VERSION != '' && steps.get-local-version.outputs.LOCAL_VERSION != ''
         run: |
           WEB_VERSION_ARRAY=($(echo ${{ steps.get-web-version.outputs.WEB_VERSION }} | tr '.' '\n'))
@@ -61,94 +54,48 @@ jobs:
             fi
           done
 
-          if [ "$IS_NEWER" = true ]; then
-            echo "New version ${{ steps.get-web-version.outputs.WEB_VERSION }} is available. Downloading..."
-            mkdir -p bin
-            WEB_VERSION="${{ steps.get-web-version.outputs.WEB_VERSION }}"
-
-            # Delete old UniVPN files
-            rm -f bin/univpn-linux-64-*.zip
-            curl -L -o bin/univpn-linux-64-${WEB_VERSION}.zip ${{ steps.get-web-version.outputs.FULL_URL }}
-            echo "Downloaded univpn-linux-64-${WEB_VERSION}.zip to bin/"
-
-            # Fetch the matching ARM64 build. It is published under the same version number on the same page.
-            ARM_URL="https://download.leagsoft.com/download/UniVPN/linuxarm/univpn-linuxarm-64-${WEB_VERSION}.zip"
-            HTTP_STATUS=$(curl -s -o /tmp/univpn-arm-check.zip -w "%{http_code}" -L "$ARM_URL")
-            if [ "$HTTP_STATUS" = "200" ]; then
-              rm -f bin/univpn-linuxarm-64-*.zip
-              mv /tmp/univpn-arm-check.zip bin/univpn-linuxarm-64-${WEB_VERSION}.zip
-              echo "Downloaded univpn-linuxarm-64-${WEB_VERSION}.zip to bin/"
-            else
-              echo "Error: ARM64 build not found at $ARM_URL (HTTP $HTTP_STATUS). Aborting update so the arm64 image isn't left on a stale version."
-              rm -f bin/univpn-linux-64-${WEB_VERSION}.zip /tmp/univpn-arm-check.zip
-              exit 1
-            fi
-
-            echo "NEW_FILE_DOWNLOADED=true" >> $GITHUB_OUTPUT
-          else
-            echo "Local version is already the latest or newer. No download needed."
-            echo "NEW_FILE_DOWNLOADED=false" >> $GITHUB_OUTPUT
+          if [ "$IS_NEWER" != true ]; then
+            echo "Local version is already the latest or newer. Nothing to do."
+            echo "SHOULD_UPDATE=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
-      # NEW: Update version files
-      - name: Update docker-compose.yml
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        run: |
-          sed -i -E "s/image: triatk\\/univpn:.*/image: triatk\\/univpn:${{ steps.get-web-version.outputs.WEB_VERSION }}/" docker-compose.yml
-          echo "Updated docker-compose.yml with version ${{ steps.get-web-version.outputs.WEB_VERSION }}"
+          WEB_VERSION="${{ steps.get-web-version.outputs.WEB_VERSION }}"
 
-      - name: Update Dockerfile
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        run: |
-          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${{ steps.get-web-version.outputs.WEB_VERSION }}/" Dockerfile
-          echo "Updated Dockerfile with version ${{ steps.get-web-version.outputs.WEB_VERSION }}"
-          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${{ steps.get-web-version.outputs.WEB_VERSION }}/" Dockerfile.cli
-          echo "Updated Dockerfile.cli with version ${{ steps.get-web-version.outputs.WEB_VERSION }}"
+          # The Dockerfiles download installers directly at build time, so before bumping
+          # CLIENT_VERSION, make sure the arm64 build actually exists for this version too
+          # (otherwise an arm64 build would start failing with a 404 the moment this merges).
+          ARM_URL="https://download.leagsoft.com/download/UniVPN/linuxarm/univpn-linuxarm-64-${WEB_VERSION}.zip"
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L "$ARM_URL")
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Error: ARM64 build not found at $ARM_URL (HTTP $HTTP_STATUS). Not bumping CLIENT_VERSION yet."
+            echo "SHOULD_UPDATE=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-      - name: Update README.md and README_zh.md
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
+          echo "New version $WEB_VERSION is available for both architectures."
+          echo "SHOULD_UPDATE=true" >> $GITHUB_OUTPUT
+
+      - name: Update Dockerfiles, docker-compose.yml, and READMEs
+        if: steps.compare-versions.outputs.SHOULD_UPDATE == 'true'
         run: |
-          OLD_VERSION=$(grep -oP '\| Release[^\|]*\| \*\*\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(?=\*\*)' README.md)
           NEW_VERSION="${{ steps.get-web-version.outputs.WEB_VERSION }}"
+          OLD_VERSION="${{ steps.get-local-version.outputs.LOCAL_VERSION }}"
 
-          if [[ -z "$OLD_VERSION" || -z "$NEW_VERSION" ]]; then
-            echo "Could not detect version numbers properly."
-            exit 1
-          fi
+          sed -i -E "s/ARG CLIENT_VERSION=.*/ARG CLIENT_VERSION=${NEW_VERSION}/" Dockerfile Dockerfile.cli
+          sed -i -E "s/image: triatk\/univpn:.*/image: triatk\/univpn:${NEW_VERSION}/" docker-compose.yml
 
           for file in README.md README_zh.md; do
             sed -i "s/${OLD_VERSION}/${NEW_VERSION}/g" "$file"
           done
 
-          echo "Updated README.md and README_zh.md from version $OLD_VERSION to $NEW_VERSION."
+          echo "Bumped CLIENT_VERSION from $OLD_VERSION to $NEW_VERSION."
 
-      - name: Commit and push new file and version update
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
+      - name: Commit and push version bump
+        if: steps.compare-versions.outputs.SHOULD_UPDATE == 'true'
         run: |
           git config user.name github-actions[bot]
           git config user.email github-actions[bot]@users.noreply.github.com
-          git add bin/univpn-linux-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip bin/univpn-linuxarm-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip docker-compose.yml Dockerfile Dockerfile.cli README.md README_zh.md
-          git commit -m "feat: Download UniVPN client version ${{ steps.get-web-version.outputs.WEB_VERSION }} and update version files"
+          git add Dockerfile Dockerfile.cli docker-compose.yml README.md README_zh.md
+          git commit -m "chore: Bump UniVPN client version to ${{ steps.get-web-version.outputs.WEB_VERSION }}"
           git push
-
-      # NEW: Build and push Docker images
-      - name: Set up QEMU
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker images
-        if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
-        run: |
-          docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t triatk/univpn:latest --push .
-          docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.cli -t triatk/univpn-cli:latest --push .
