@@ -64,10 +64,26 @@ jobs:
           if [ "$IS_NEWER" = true ]; then
             echo "New version ${{ steps.get-web-version.outputs.WEB_VERSION }} is available. Downloading..."
             mkdir -p bin
+            WEB_VERSION="${{ steps.get-web-version.outputs.WEB_VERSION }}"
+
             # Delete old UniVPN files
             rm -f bin/univpn-linux-64-*.zip
-            curl -L -o bin/univpn-linux-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip ${{ steps.get-web-version.outputs.FULL_URL }}
-            echo "Downloaded univpn-linux-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip to bin/"
+            curl -L -o bin/univpn-linux-64-${WEB_VERSION}.zip ${{ steps.get-web-version.outputs.FULL_URL }}
+            echo "Downloaded univpn-linux-64-${WEB_VERSION}.zip to bin/"
+
+            # Fetch the matching ARM64 build. It is published under the same version number on the same page.
+            ARM_URL="https://download.leagsoft.com/download/UniVPN/linuxarm/univpn-linuxarm-64-${WEB_VERSION}.zip"
+            HTTP_STATUS=$(curl -s -o /tmp/univpn-arm-check.zip -w "%{http_code}" -L "$ARM_URL")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              rm -f bin/univpn-linuxarm-64-*.zip
+              mv /tmp/univpn-arm-check.zip bin/univpn-linuxarm-64-${WEB_VERSION}.zip
+              echo "Downloaded univpn-linuxarm-64-${WEB_VERSION}.zip to bin/"
+            else
+              echo "Error: ARM64 build not found at $ARM_URL (HTTP $HTTP_STATUS). Aborting update so the arm64 image isn't left on a stale version."
+              rm -f bin/univpn-linux-64-${WEB_VERSION}.zip /tmp/univpn-arm-check.zip
+              exit 1
+            fi
+
             echo "NEW_FILE_DOWNLOADED=true" >> $GITHUB_OUTPUT
           else
             echo "Local version is already the latest or newer. No download needed."
@@ -111,7 +127,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email github-actions[bot]@users.noreply.github.com
-          git add bin/univpn-linux-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip docker-compose.yml Dockerfile Dockerfile.cli README.md README_zh.md
+          git add bin/univpn-linux-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip bin/univpn-linuxarm-64-${{ steps.get-web-version.outputs.WEB_VERSION }}.zip docker-compose.yml Dockerfile Dockerfile.cli README.md README_zh.md
           git commit -m "feat: Download UniVPN client version ${{ steps.get-web-version.outputs.WEB_VERSION }} and update version files"
           git push
 
@@ -134,7 +150,5 @@ jobs:
       - name: Build and push Docker images
         if: steps.compare-versions-and-download.outputs.NEW_FILE_DOWNLOADED == 'true'
         run: |
-          docker build -f Dockerfile -t triatk/univpn:latest .
-          docker push triatk/univpn:latest
-          docker build -f Dockerfile.cli -t triatk/univpn-cli:latest .
-          docker push triatk/univpn-cli:latest
+          docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile -t triatk/univpn:latest --push .
+          docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.cli -t triatk/univpn-cli:latest --push .

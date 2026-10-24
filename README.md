@@ -15,8 +15,9 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
 | Field           | Value                                                               |
 | :-------------- | :------------------------------------------------------------------ |
 | Release         | **10781.21.0.0831**                                                 |
-| Binary Location | Included in repository: `./bin/univpn-linux-64-10781.21.0.0831.zip` |
+| Binary Location | Included in repository: `./bin/univpn-linux-64-10781.21.0.0831.zip` (amd64), `./bin/univpn-linuxarm-64-10781.21.0.0831.zip` (arm64) |
 | Base OS         | Ubuntu 22.04 LTS                                                    |
+| Architectures   | `linux/amd64`, `linux/arm64`                                        |
 | Access Method   | VNC (Port 5901), Web Browser via noVNC (Port 6901)                  |
 | Proxy           | SOCKS5 (Dante) on Port 1080, HTTP (Tinyproxy) on Port 8888          |
 
@@ -77,8 +78,11 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
 
 3.  **Start the Container:**
 
+    `docker-compose.yml` includes a `build:` section alongside `image:`, so everything builds and runs locally — nothing is pulled from or pushed to Docker Hub.
+
     ```bash
-    docker-compose up -d
+    docker-compose up -d            # builds locally the first time, then just runs
+    docker-compose up -d --build    # force a rebuild (e.g. after editing the Dockerfile)
     ```
 
 4.  **Connect to the GUI:**
@@ -102,39 +106,78 @@ This project provides a Docker container for the Huawei UniVPN GUI client (versi
 
 ## CLI-Only Docker Image
 
-This repository also provides a `Dockerfile.cli` for building a command-line interface (CLI) only version of the UniVPN client. This image is suitable for environments where GUI access is not needed, such as CI/CD pipelines, scripting, or headless servers.
+This repository also provides a `Dockerfile.cli` for building a command-line interface (CLI) only version of the UniVPN client. This image is suitable for environments where GUI access is not needed, such as CI/CD pipelines, scripting, headless servers, or arm64 hosts (see [Known Issues](#known-issues) below).
 
 **New Dockerfile:** `Dockerfile.cli`
-**New Docker Image:** `triatk/univpn` (available on Docker Hub)
+**Image tag used by `docker-compose-cli.yml`:** `triatk/univpn:latest-cli`
 
 ### Building the CLI Image
 
 The existing CI workflow (`.github/workflows/docker-image.yml`) has been updated to automatically build and push the `triatk/univpn` image when changes are pushed to the `cli-only-image` branch.
 
-To build it manually, you can use:
+To build it manually:
 
-````bash
-# Ensure you have the zip file in ./bin/
-# Build the CLI image (replace 'latest' with a version tag if desired)
 ```bash
+# Ensure you have the matching zip file in ./bin/
 docker build -t triatk/univpn:latest-cli -f Dockerfile.cli .
-````
+```
 
-### Using the CLI Image
+### Creating a Connection Profile
 
-The CLI image is designed for direct command execution. You would typically run commands like `vpn_client login`, `vpn_client connect`, etc., inside the container.
+The CLI client (`UniVPNCS`) needs a saved connection profile before it can log in. Create one **once**, interactively, using `UniVPNCS`'s own text menu — it never touches a GUI, so it works identically on amd64 and arm64:
 
-Example:
-
-````bash
-# To have your VPN credentials and profile configured, run
 ```bash
 docker run --rm -it \
   -v ./univpn_config:/home/vpnuser/UniVPN \
-  --name univpn \
+  --name univpn-setup \
+  --user vpnuser -e HOME=/home/vpnuser \
   triatk/univpn:latest-cli \
-  bash -c "/usr/local/UniVPN/serviceclient/UniVPNCS"
-````
+  /usr/local/UniVPN/serviceclient/UniVPNCS
+```
+
+Walk through the menu:
+
+```
+Welcome to UniVPN!
+1:New Connection          <- type 1
+2:Exit
+
+Please choose Connection Type
+1:SSL VPN                 <- type 1
+2:L2TP/IPSec
+3:Cancel
+
+                       SSL Configuration
+1:Connection Name(Required):   <- type 1, then enter a name
+2:Description:
+3:Gateway Address(Required):   <- type 3, then enter your gateway IP/host
+4:Port:443                     <- type 4, then enter the gateway port
+5:Tunnel Mode:Auto-sensing
+6:Certificate Authentication:Disable
+7:GmSSL algorithm:Disable
+8:Save                         <- type 8 once Name/Gateway/Port are filled in
+9:Cancel
+```
+
+After saving, `2:Exit` to quit. This writes `sysconfig.ini` and `config/<ConnectionName>.ini` under `./univpn_config/` on the host — keep that directory out of version control (it's already in `.gitignore`), since it contains your gateway address.
+
+### Using the CLI Image
+
+Once a profile exists under `./univpn_config/`, set your credentials in `.env` (see `.envexample`) and start the container normally. `docker-compose-cli.yml` also has a `build:` section, so this builds locally instead of pulling from Docker Hub:
+
+```bash
+docker-compose -f docker-compose-cli.yml up -d            # builds locally the first time
+docker-compose -f docker-compose-cli.yml up -d --build    # force a rebuild
+docker-compose -f docker-compose-cli.yml logs -f
+```
+
+`univpn-keeper.sh.cli` drives `UniVPNCS` automatically: it picks the first saved connection from the menu, connects, and answers the username/password prompts using `VPN_USERNAME`/`VPN_PASSWORD` from the environment. The SOCKS5 (`1080`) and HTTP (`8888`) proxies come up the same way as the GUI image.
+
+To force a reconnect:
+
+```bash
+docker exec univpn reconnect
+```
 
 ## Auto-Reconnect & Manual Restart
 
@@ -154,11 +197,15 @@ If `AUTO_RECONNECT=true` is set in your `.env` file:
 
 If the VPN freezes or you need to restart it manually without restarting the whole container:
 
-- **From Host Terminal:**
+- **From Host Terminal (GUI image):**
   ```bash
   docker exec univpn-vnc reconnect
   ```
-- **From Inside VNC:**
+- **From Host Terminal (CLI image):**
+  ```bash
+  docker exec univpn reconnect
+  ```
+- **From Inside VNC (GUI image only):**
   Open the Fluxbox terminal (Right Click -> Applications -> Shells -> Bash) and type:
   ```bash
   reconnect
@@ -166,7 +213,7 @@ If the VPN freezes or you need to restart it manually without restarting the who
 
 ## Inside the Container
 
-- The container runs a Fluxbox window manager.
+- The GUI image runs an `Xvfb` virtual X server with `x11vnc` serving the VNC connection, and a Fluxbox window manager on top.
 - **UniVPN GUI** is launched by `/usr/local/bin/univpn-keeper.sh`.
 - **Dante (SOCKS5)** and **Tinyproxy (HTTP)** run in the background via Supervisor.
 
@@ -183,7 +230,13 @@ If the VPN freezes or you need to restart it manually without restarting the who
 
 - **Looping Restarts:** If you see the VPN opening and closing repeatedly, check if `RECONNECT_PING_TARGET` is reachable. If the VPN blocks internet access but allows internal IPs, set the target to an internal server IP.
 - **Not enough time to login:** Increase `RECONNECT_GRACE_PERIOD` in the `.env` file.
-- **Container Crashing:** Check logs: `docker-compose logs univpn`.
+- **Container Crashing:** Check logs: `docker-compose logs univpn`. Note that `docker-compose logs` only shows supervisor's own output — the actual VPN client log lives at `/var/log/supervisor/univpn-keeper_stdout.log` (GUI image) or `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log` (CLI image) inside the container.
+
+## Known Issues
+
+- **GUI image on `linux/arm64`: creating a connection via "New Connection" can crash the UniVPN window (screen goes black on the first click/keypress in the dialog).** This is a crash inside `libxkbcommon`/Qt5's XCB keyboard handling (`QXcbKeyboard::updateKeymap` → `xkb_keymap_unref` on an invalid pointer) that reproduces regardless of VNC backend (TigerVNC's Xvnc or Xvfb+x11vnc) — it is not something fixable from this project's Dockerfile/config. The keeper script restarts the crashed process automatically within a few seconds, but you can lose dialog input repeatedly.
+
+  **Workaround:** create the connection profile through the CLI client's text menu instead — see [Creating a Connection Profile](#creating-a-connection-profile) above. It never touches Qt/X11, so it is unaffected by this bug on any architecture. Once a profile exists under `./univpn_config/`, the GUI's main window (selecting an existing connection and clicking **Connect**) works normally; only the **New Connection** dialog is affected.
 
 ## License
 

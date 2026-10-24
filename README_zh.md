@@ -16,8 +16,9 @@
 | 字段           | 值                                                           |
 | :------------- | :----------------------------------------------------------- |
 | Release 版本   | **10781.21.0.0831**                                          |
-| 二进制文件位置 | 包含在仓库中: `./bin/univpn-linux-64-10781.21.0.0831.zip`    |
+| 二进制文件位置 | 包含在仓库中: `./bin/univpn-linux-64-10781.21.0.0831.zip` (amd64)、`./bin/univpn-linuxarm-64-10781.21.0.0831.zip` (arm64) |
 | 基础操作系统   | Ubuntu 22.04 LTS                                             |
+| 支持架构       | `linux/amd64`、`linux/arm64`                                 |
 | 访问方式       | VNC (端口 5901), Web 浏览器通过 noVNC (端口 6901)            |
 | 代理           | SOCKS5 (Dante) 在端口 1080, **HTTP (Tinyproxy) 在端口 8888** |
 
@@ -77,8 +78,11 @@
 
 3.  **启动容器:**
 
+    `docker-compose.yml` 在 `image:` 之外还加了 `build:` 配置，所以全程本地构建、本地运行，不会从 Docker Hub 拉取，也不会推送上去。
+
     ```bash
-    docker-compose up -d
+    docker-compose up -d            # 第一次会本地构建，之后直接运行
+    docker-compose up -d --build    # 强制重新构建（比如改了 Dockerfile 之后）
     ```
 
 4.  **连接到 GUI:**
@@ -102,44 +106,78 @@
 
 ## 纯命令行 (CLI) Docker 镜像
 
-本仓库还提供了一个 `Dockerfile.cli` 文件，用于构建 UniVPN 客户端的纯命令行 (CLI) 版本。此镜像适用于不需要图形界面的环境，例如 CI/CD 流水线、脚本编写或无头服务器。
+本仓库还提供了一个 `Dockerfile.cli` 文件，用于构建 UniVPN 客户端的纯命令行 (CLI) 版本。此镜像适用于不需要图形界面的环境，例如 CI/CD 流水线、脚本编写、无头服务器，或 arm64 主机（见下方[已知问题](#已知问题)）。
 
 **新的 Dockerfile:** `Dockerfile.cli`
-**新的 Docker 镜像:** `triatk/univpn-cli` (可在 Docker Hub 上找到)
+**`docker-compose-cli.yml` 使用的镜像标签:** `triatk/univpn:latest-cli`
 
 ### 构建 CLI 镜像
 
-已更新 CI 工作流程 (`.github/workflows/docker-image.yml`)，当推送到 `cli-only-image` 分支时，会自动构建并推送 `triatk/univpn-cli` 镜像。
+已更新 CI 工作流程 (`.github/workflows/docker-image.yml`)，当推送到 `cli-only-image` 分支时，会自动构建并推送 `triatk/univpn` 镜像。
 
 您也可以手动构建：
 
 ```bash
-# 确保您的 bin/ 目录下有 zip 文件
-# 构建 CLI 镜像 (可选：将 'latest' 替换为版本标签)
-docker build -t triatk/univpn-cli:latest -f Dockerfile.cli .
-
-# 推送到 Docker Hub (需要登录)
-# docker login
-# docker push triatk/univpn-cli:latest
+# 确保您的 bin/ 目录下有对应架构的 zip 文件
+docker build -t triatk/univpn:latest-cli -f Dockerfile.cli .
 ```
+
+### 创建连接配置
+
+CLI 客户端 (`UniVPNCS`) 登录前需要一份已保存的连接配置。用 `UniVPNCS` 自带的文本菜单**一次性**创建即可——这个过程完全不经过 GUI，所以在 amd64 和 arm64 上行为完全一致：
+
+```bash
+docker run --rm -it \
+  -v ./univpn_config:/home/vpnuser/UniVPN \
+  --name univpn-setup \
+  --user vpnuser -e HOME=/home/vpnuser \
+  triatk/univpn:latest-cli \
+  /usr/local/UniVPN/serviceclient/UniVPNCS
+```
+
+按菜单操作：
+
+```
+Welcome to UniVPN!
+1:New Connection          <- 输入 1
+2:Exit
+
+Please choose Connection Type
+1:SSL VPN                 <- 输入 1
+2:L2TP/IPSec
+3:Cancel
+
+                       SSL Configuration
+1:Connection Name(Required):   <- 输入 1，再输入连接名称
+2:Description:
+3:Gateway Address(Required):   <- 输入 3，再输入网关地址
+4:Port:443                     <- 输入 4，再输入网关端口
+5:Tunnel Mode:Auto-sensing
+6:Certificate Authentication:Disable
+7:GmSSL algorithm:Disable
+8:Save                         <- 名称/网关/端口都填好后输入 8 保存
+9:Cancel
+```
+
+保存后输入 `2` 退出。这一步会在宿主机的 `./univpn_config/` 下写入 `sysconfig.ini` 和 `config/<连接名>.ini`——这个目录已经在 `.gitignore` 里了，不要把它提交到版本控制，因为里面有你的真实网关地址。
 
 ### 使用 CLI 镜像
 
-CLI 镜像设计用于纯命令行运行UniVPN。
-
-首次使用 (需要输入以下命令手动配置好 VPN 凭据和配置文件):
+`./univpn_config/` 下有了配置文件之后，在 `.env` 里填好账号密码（参考 `.envexample`），正常启动容器即可。`docker-compose-cli.yml` 同样加了 `build:` 配置，本地构建，不会去 Docker Hub 拉取：
 
 ```bash
-# 假设您已配置好 VPN 凭据和配置文件
-# 并且 Dockerfile.cli 使用 CMD 启动 bash
-docker run --rm -it \
-  -v ./univpn_config:/home/vpnuser/UniVPN \
-  --name univpn-cli \
-  triatk/univpn-cli:latest \
-  bash -c "/usr/local/UniVPN/UniVPN"
+docker-compose -f docker-compose-cli.yml up -d            # 第一次会本地构建
+docker-compose -f docker-compose-cli.yml up -d --build    # 强制重新构建
+docker-compose -f docker-compose-cli.yml logs -f
 ```
 
-_注意：实际使用时，您可能需要调整 `Dockerfile.cli` 中的 `CMD` 命令，或在 `docker run` 命令中指定具体要执行的命令。当前 `Dockerfile.cli` 的 `CMD` 是 `["/bin/bash"]`，允许交互式 shell 访问。_
+`univpn-keeper.sh.cli` 会自动驱动 `UniVPNCS`：从菜单里选中第一个已保存的连接、发起连接，并用环境变量里的 `VPN_USERNAME`/`VPN_PASSWORD` 自动应答用户名密码提示。SOCKS5 (`1080`) 和 HTTP (`8888`) 代理跟 GUI 镜像一样会自动起来。
+
+手动触发重连：
+
+```bash
+docker exec univpn reconnect
+```
 
 ## 自动重连与手动重启
 
@@ -159,11 +197,15 @@ _注意：实际使用时，您可能需要调整 `Dockerfile.cli` 中的 `CMD` 
 
 如果 VPN 卡死，或者您需要手动重启它而不想重启整个容器：
 
-- **从宿主机终端:**
+- **从宿主机终端 (GUI 镜像):**
   ```bash
   docker exec univpn-vnc reconnect
   ```
-- **从 VNC 内部:**
+- **从宿主机终端 (CLI 镜像):**
+  ```bash
+  docker exec univpn reconnect
+  ```
+- **从 VNC 内部 (仅 GUI 镜像):**
   打开 Fluxbox 终端 (右键 -> Applications -> Shells -> Bash) 并输入:
   ```bash
   reconnect
@@ -171,7 +213,7 @@ _注意：实际使用时，您可能需要调整 `Dockerfile.cli` 中的 `CMD` 
 
 ## 容器内部
 
-- 容器运行 Fluxbox 窗口管理器。
+- GUI 镜像运行一个 `Xvfb` 虚拟 X server，用 `x11vnc` 提供 VNC 连接，上层再跑 Fluxbox 窗口管理器。
 - **UniVPN GUI** 由 `/usr/local/bin/univpn-keeper.sh` 脚本启动。
 - **Dante (SOCKS5)** 和 **Tinyproxy (HTTP)** 通过 Supervisor 在后台运行。
 
@@ -188,7 +230,13 @@ _注意：实际使用时，您可能需要调整 `Dockerfile.cli` 中的 `CMD` 
 
 - **无限重启循环:** 如果看到 VPN 反复打开和关闭，请检查 `RECONNECT_PING_TARGET` 是否可达。如果 VPN 禁止访问外网但允许访问内网，请将目标 IP 设置为内网服务器 IP。
 - **登录时间不足:** 在 `.env` 文件中增加 `RECONNECT_GRACE_PERIOD` 的值。
-- **容器崩溃:** 查看日志: `docker-compose logs univpn`。
+- **容器崩溃:** 查看日志: `docker-compose logs univpn`。注意 `docker-compose logs` 只能看到 supervisor 自己的编排日志——VPN 客户端真正的日志在容器内的 `/var/log/supervisor/univpn-keeper_stdout.log`（GUI 镜像）或 `univpn-keeper_stdout.log`/`univpn-keeper_stderr.log`（CLI 镜像）。
+
+## 已知问题
+
+- **GUI 镜像在 `linux/arm64` 上：通过"New Connection"创建连接时，UniVPN 窗口可能崩溃（对话框里第一次点击/按键就黑屏）。** 这是 Qt5 的 XCB 键盘处理（`QXcbKeyboard::updateKeymap` → `xkb_keymap_unref` 传入了一个无效指针）在 `libxkbcommon` 内部的崩溃，无论用哪种 VNC 后端（TigerVNC 的 Xvnc，还是 Xvfb+x11vnc）都会复现——不是这个项目的 Dockerfile/配置能修复的问题。守护脚本会在几秒内自动重启崩溃的进程，但对话框里的输入会反复丢失。
+
+  **规避方法：** 改用 CLI 客户端的文本菜单创建连接配置，见上方[创建连接配置](#创建连接配置)。这个流程完全不碰 Qt/X11，在任何架构上都不受此 bug 影响。`./univpn_config/` 下有了配置文件之后，GUI 主界面（选中已有连接点 **Connect**）是正常的，只有 **New Connection** 对话框受影响。
 
 ## 许可证
 

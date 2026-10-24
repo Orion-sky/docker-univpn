@@ -6,6 +6,10 @@ ENABLE=${AUTO_RECONNECT:-false}
 GRACE=${RECONNECT_GRACE_PERIOD:-60}
 APP_CMD="/usr/local/UniVPN/UniVPN"
 
+# Xvnc does not implement the GLX extension. Qt5's XCB platform plugin probing
+# GLX integration against it segfaults the app on startup, so force it off.
+export QT_XCB_GL_INTEGRATION=none
+
 # Helper function for logging with timestamp
 log() {
     echo "[Keeper] $(date '+%Y-%m-%d %H:%M:%S') - $1"

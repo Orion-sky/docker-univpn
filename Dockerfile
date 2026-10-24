@@ -2,8 +2,10 @@
 FROM ubuntu:22.04
 
 # Set Arguments
+ARG TARGETARCH
 ARG CLIENT_VERSION=10781.21.0.0831
-ARG ZIP_FILE_REL_PATH=bin/univpn-linux-64-${CLIENT_VERSION}.zip
+ARG ZIP_FILE_AMD64_REL_PATH=bin/univpn-linux-64-${CLIENT_VERSION}.zip
+ARG ZIP_FILE_ARM64_REL_PATH=bin/univpn-linuxarm-64-${CLIENT_VERSION}.zip
 ARG INSTALLER_SOURCE_DIR=/home/UniVPN
 ARG ACTUAL_INSTALL_DIR=/usr/local/UniVPN
 ARG GUI_APP_PATH=${ACTUAL_INSTALL_DIR}
@@ -35,11 +37,12 @@ ENV AUTO_RECONNECT=false
 ENV RECONNECT_PING_TARGET=8.8.8.8
 ENV RECONNECT_GRACE_PERIOD=60
 
-# --- Pre-configure debconf for keyboard-configuration ---
-RUN echo "keyboard-configuration keyboard-configuration/layoutcode string us" | debconf-set-selections && \
-    echo "keyboard-configuration keyboard-configuration/modelcode string pc105" | debconf-set-selections && \
-    echo "keyboard-configuration keyboard-configuration/variantcode string ''" | debconf-set-selections && \
-    echo "keyboard-configuration keyboard-configuration/xkb-keymap select us" | debconf-set-selections
+# --- Configure keyboard layout ---
+# Xtigervnc-session only calls setxkbmap when /etc/default/keyboard exists. Without it,
+# Xvnc keeps its own built-in XKB keymap, which crashes Qt5's libxkbcommon (xkb_keymap_unref)
+# the moment a real key event arrives. Writing this file makes setxkbmap run before the app
+# starts, giving the client a stable keymap from the start.
+RUN printf 'XKBMODEL="pc105"\nXKBLAYOUT="us"\nXKBVARIANT=""\nXKBOPTIONS=""\nBACKSPACE="guess"\n' > /etc/default/keyboard
 
 # Install dependencies
 RUN apt-get update && \
@@ -66,8 +69,8 @@ RUN apt-get update && \
     fonts-liberation \
     fonts-noto-core \
     fonts-wqy-zenhei \
-    tigervnc-standalone-server \
-    tigervnc-tools \
+    xvfb \
+    x11vnc \
     fluxbox \
     supervisor \
     novnc \
@@ -111,11 +114,20 @@ RUN echo "Verifying ${USERNAME} home directory..." && \
 RUN mkdir -p ${INSTALLER_SOURCE_DIR} && \
     chown ${USERNAME}:${USERNAME} ${INSTALLER_SOURCE_DIR}
 
-# Copy the installer zip file into that directory
-COPY ${ZIP_FILE_REL_PATH} ${INSTALLER_SOURCE_DIR}/installer.zip
+# Copy both architecture installer zips; the correct one is selected below based on TARGETARCH
+COPY ${ZIP_FILE_AMD64_REL_PATH} ${INSTALLER_SOURCE_DIR}/installer-amd64.zip
+COPY ${ZIP_FILE_ARM64_REL_PATH} ${INSTALLER_SOURCE_DIR}/installer-arm64.zip
 
 # Set the working directory TO the installer source directory
 WORKDIR ${INSTALLER_SOURCE_DIR}
+
+# Select the installer zip matching the build target's architecture
+RUN case "${TARGETARCH}" in \
+        amd64) mv installer-amd64.zip installer.zip ;; \
+        arm64) mv installer-arm64.zip installer.zip ;; \
+        *) echo "Error: Unsupported TARGETARCH '${TARGETARCH}'."; exit 1 ;; \
+    esac && \
+    rm -f installer-amd64.zip installer-arm64.zip
 
 # Unzip the installer within this directory and remove the zip file
 RUN unzip installer.zip && \
@@ -187,10 +199,6 @@ RUN chmod +x /usr/local/bin/novnc_launch.sh
 # --- Copy the UniVPN Keeper Script ---
 COPY univpn-keeper.sh /usr/local/bin/univpn-keeper.sh
 RUN chmod +x /usr/local/bin/univpn-keeper.sh
-
-# --- Copy the Xtigervnc-session Script ---
-COPY Xtigervnc-session /etc/X11/Xtigervnc-session
-RUN chmod +x /etc/X11/Xtigervnc-session
 
 # Set final working directory to user's home
 WORKDIR /home/${USERNAME}

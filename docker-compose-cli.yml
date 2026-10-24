@@ -3,6 +3,9 @@ version: "3.8" # Use a recent compose version
 services:
   univpn:
     image: triatk/univpn:latest-cli
+    build:
+      context: .
+      dockerfile: Dockerfile.cli
     container_name: univpn
     restart: unless-stopped
 
